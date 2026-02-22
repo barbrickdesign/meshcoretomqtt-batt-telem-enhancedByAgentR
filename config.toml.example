@@ -36,6 +36,13 @@ timeout = 2
 # Watchdog: seconds with no data before forcing serial reconnect (0 to disable)
 watchdog_timeout = 900
 
+# External power monitor type (empty = disabled, no stats-extpower command sent)
+# Supported types: "ina3221"
+ext_power_type = ""
+
+# Battery voltage channel for external power monitor (e.g. 2 for ch2_voltage_mv)
+ext_power_source = 0
+
 [topics]
 # Topic templates - supported variables: {IATA}, {PUBLIC_KEY}
 status = "meshcore/{IATA}/{PUBLIC_KEY}/status"

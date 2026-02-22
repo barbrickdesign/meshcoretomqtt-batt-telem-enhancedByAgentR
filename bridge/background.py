@@ -138,7 +138,10 @@ def _log_device_stats(state: BridgeState, time_elapsed: float) -> None:
         parts.append(f"Air (5m): Tx {ds['tx_air_secs']}s, Rx {ds['rx_air_secs']}s")
 
     if 'battery_mv' in ds:
-        parts.append(f"Battery: {ds['battery_mv']}mV")
+        if 'battery_source' in ds:
+            parts.append(f"Battery: {ds['battery_mv']}mV ({ds['battery_source']})")
+        else:
+            parts.append(f"Battery: {ds['battery_mv']}mV")
 
     if 'uptime_secs' in ds:
         dev_uptime_secs = ds['uptime_secs']

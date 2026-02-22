@@ -10,7 +10,7 @@ import pytest
 from bridge.serial_connection import RealSerialConnection, connect
 
 
-def _make_conn(read_all_value: bytes | list[bytes] = b"") -> tuple[RealSerialConnection, MagicMock]:
+def _make_conn(read_all_value: bytes | list[bytes] = b"", ext_power_type: str = "", ext_power_source: int = 0) -> tuple[RealSerialConnection, MagicMock]:
     """Create a RealSerialConnection with a mock serial port."""
     mock_port = MagicMock(spec=serial.Serial)
     mock_port.is_open = True
@@ -18,7 +18,7 @@ def _make_conn(read_all_value: bytes | list[bytes] = b"") -> tuple[RealSerialCon
         mock_port.read_all.side_effect = read_all_value
     else:
         mock_port.read_all.return_value = read_all_value
-    conn = RealSerialConnection(mock_port)
+    conn = RealSerialConnection(mock_port, ext_power_type=ext_power_type, ext_power_source=ext_power_source)
     return conn, mock_port
 
 
@@ -191,6 +191,47 @@ class TestGetDeviceStats:
         stats = conn.get_device_stats()
         assert 'battery_mv' not in stats
         assert stats['noise_floor'] == -90
+
+    def test_extpower_overrides_battery(self):
+        """stats-extpower with ina3221 type: ch2 voltage overrides stats-core battery_mv."""
+        conn, _ = _make_conn([
+            b'stats-core\n  -> {"battery_mv":3939,"uptime_secs":3600}\n> ',
+            b'stats-radio\n  -> Unknown command\n> ',
+            b'stats-packets\n  -> Unknown command\n> ',
+            b'stats-extpower\n  -> {"ch1_voltage_mv":12450,"ch2_voltage_mv":3800,"ch3_voltage_mv":4120}\n> ',
+        ], ext_power_type="ina3221", ext_power_source=2)
+        stats = conn.get_device_stats()
+        assert stats['battery_mv'] == 3800
+        assert stats['battery_source'] == "extpower ch2"
+        assert stats['extpower']['ch1_voltage_mv'] == 12450
+        assert stats['extpower']['ch2_voltage_mv'] == 3800
+        assert stats['extpower']['ch3_voltage_mv'] == 4120
+
+    def test_extpower_unknown_command_falls_back(self):
+        """stats-extpower returns Unknown command; battery_mv comes from stats-core."""
+        conn, _ = _make_conn([
+            b'stats-core\n  -> {"battery_mv":3939}\n> ',
+            b'stats-radio\n  -> Unknown command\n> ',
+            b'stats-packets\n  -> Unknown command\n> ',
+            b'stats-extpower\n  -> Unknown command\n> ',
+        ], ext_power_type="ina3221", ext_power_source=2)
+        stats = conn.get_device_stats()
+        assert stats['battery_mv'] == 3939
+        assert 'battery_source' not in stats
+        assert 'extpower' not in stats
+
+    def test_extpower_disabled_when_type_empty(self):
+        """ext_power_type="" skips stats-extpower entirely (only 3 serial commands)."""
+        conn, mock_port = _make_conn([
+            b'stats-core\n  -> {"battery_mv":4200}\n> ',
+            b'stats-radio\n  -> Unknown command\n> ',
+            b'stats-packets\n  -> Unknown command\n> ',
+        ], ext_power_type="")
+        stats = conn.get_device_stats()
+        assert stats['battery_mv'] == 4200
+        assert 'extpower' not in stats
+        # Only 3 write calls (stats-core, stats-radio, stats-packets)
+        assert mock_port.write.call_count == 3
 
 
 # ------------------------------------------------------------------

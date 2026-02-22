@@ -70,10 +70,12 @@ class SerialConnection(ABC):
 class RealSerialConnection(SerialConnection):
     """Concrete implementation wrapping serial.Serial with internal locking."""
 
-    def __init__(self, port: serial.Serial) -> None:
+    def __init__(self, port: serial.Serial, ext_power_type: str = "", ext_power_source: int = 0) -> None:
         self._port = port
         self._lock = threading.Lock()
         self._last_activity = time.time()
+        self._ext_power_type = ext_power_type
+        self._ext_power_source = ext_power_source
 
     def _send(self, cmd: str, delay: float = 0.5) -> str:
         """Send command and read response under lock."""
@@ -250,6 +252,30 @@ class RealSerialConnection(SerialConnection):
                 except (json.JSONDecodeError, ValueError) as e:
                     logger.debug(f"Failed to parse stats-packets: {e}")
 
+            # stats-extpower: external power monitor telemetry
+            if self._ext_power_type:
+                response = self._send_unlocked("stats-extpower\r\n")
+                logger.debug(f"Raw stats-extpower response: {response}")
+
+                if "-> " in response and "Unknown command" not in response:
+                    try:
+                        json_str = response.split("-> ", 1)[1].strip()
+                        json_str = json_str.split('\n')[0].replace('\r', '').strip()
+                        extpower_stats: dict[str, Any] = json.loads(json_str)
+                        stats['extpower'] = extpower_stats
+
+                        if self._ext_power_type == "ina3221":
+                            channel_key = f"ch{self._ext_power_source}_voltage_mv"
+                            if channel_key in extpower_stats:
+                                stats['battery_mv'] = extpower_stats[channel_key]
+                                stats['battery_source'] = f"extpower ch{self._ext_power_source}"
+                        else:
+                            logger.warning(f"Unknown ext_power_type: {self._ext_power_type}")
+                    except (json.JSONDecodeError, ValueError) as e:
+                        logger.debug(f"Failed to parse stats-extpower: {e}")
+                else:
+                    logger.debug("stats-extpower not supported by firmware, using stats-core battery_mv")
+
         if stats:
             self._last_activity = time.time()
 
@@ -343,6 +369,8 @@ def connect(config: dict[str, Any]) -> RealSerialConnection | None:
     ports = serial_cfg.get('ports', ['/dev/ttyACM0'])
     baud_rate = serial_cfg.get('baud_rate', 115200)
     timeout = serial_cfg.get('timeout', 2)
+    ext_power_type = serial_cfg.get('ext_power_type', '')
+    ext_power_source = serial_cfg.get('ext_power_source', 0)
 
     for port in ports:
         try:
@@ -359,7 +387,7 @@ def connect(config: dict[str, Any]) -> RealSerialConnection | None:
             ser.reset_input_buffer()
             ser.reset_output_buffer()
             logger.info(f"Connected to {port}")
-            return RealSerialConnection(ser)
+            return RealSerialConnection(ser, ext_power_type=ext_power_type, ext_power_source=ext_power_source)
         except (serial.SerialException, OSError) as e:
             logger.warning(f"Failed to connect to {port}: {str(e)}")
             continue
