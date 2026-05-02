@@ -480,6 +480,36 @@ keys. All packets will be forwarded as raw data without additional processing
 or decryption. The primary use of this script is to send data to LetsMesh.net.
 Learn at https://letsmesh.net/
 
+## Browser Dashboard (PyScript)
+
+A self-contained web dashboard is included in the [`dashboard/`](dashboard/) directory.
+It connects to your MQTT broker via WebSocket and visualises live data —
+**all processing logic is written in Python running inside your browser** via
+[PyScript](https://pyscript.net/) (Pyodide / WebAssembly).
+
+**Features:**
+
+- 🔋 Battery voltage card + scrolling history chart (including INA3221 external
+  power monitor channels when `ext_power_type = "ina3221"` is configured)
+- 📶 RSSI / SNR per-packet history chart
+- 📊 Device stats: uptime, TX/RX airtime & utilisation %, noise floor, RX errors
+- 📡 Live scrolling packet feed (direction, route, type, hash, path)
+- One-click presets for LetsMesh US / EU brokers
+
+**Quick start:**
+
+```bash
+# From the repo root — open directly in your browser:
+open dashboard/index.html          # macOS
+xdg-open dashboard/index.html      # Linux
+
+# Or serve via Python if your browser blocks file:// WebSockets:
+python3 -m http.server 8080 --directory dashboard
+# then open http://localhost:8080
+```
+
+See [`dashboard/README.md`](dashboard/README.md) for full documentation.
+
 ## Viewing the data
 
 - Use a MQTT tool to view the packet data. I recommend MQTTX.
