@@ -1,0 +1,1067 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MeshCore MQTT Dashboard</title>
+
+  <!-- PyScript 2024 -->
+  <link rel="stylesheet" href="https://pyscript.net/releases/2024.11.1/core.css">
+  <script type="module" src="https://pyscript.net/releases/2024.11.1/core.js"></script>
+
+  <!-- MQTT.js (WebSocket MQTT client) -->
+  <script src="https://unpkg.com/mqtt@5.3.4/dist/mqtt.min.js"></script>
+
+  <!-- Chart.js 4 -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+
+  <style>
+    :root {
+      --bg:        #0d1117;
+      --bg2:       #161b22;
+      --bg3:       #1c2128;
+      --bg4:       #21262d;
+      --border:    #30363d;
+      --text:      #e6edf3;
+      --text2:     #8b949e;
+      --text3:     #6e7681;
+      --green:     #3fb950;
+      --blue:      #58a6ff;
+      --orange:    #d29922;
+      --red:       #f85149;
+      --purple:    #bc8cff;
+      --cyan:      #39d353;
+      --batt-ok:   #3fb950;
+      --batt-warn: #d29922;
+      --batt-low:  #f85149;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    /* ── Loading overlay ──────────────────────────────────────── */
+    #py-loading {
+      position: fixed; inset: 0;
+      background: var(--bg);
+      display: flex; align-items: center; justify-content: center;
+      flex-direction: column; gap: 14px;
+      z-index: 9999;
+    }
+    #py-loading p { color: var(--text2); font-size: .9rem; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner {
+      border: 3px solid var(--border);
+      border-top-color: var(--blue);
+      border-radius: 50%;
+      width: 28px; height: 28px;
+      animation: spin .7s linear infinite;
+    }
+
+    /* ── Header ───────────────────────────────────────────────── */
+    header {
+      background: var(--bg2);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 24px;
+      display: flex; align-items: center; gap: 10px;
+    }
+    header h1 { font-size: 1.15rem; font-weight: 600; }
+    .hdr-badge {
+      margin-left: auto;
+      display: flex; align-items: center; gap: 6px;
+      font-size: .82rem; color: var(--text2);
+    }
+    .dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--text3); flex-shrink: 0;
+    }
+    .dot.on  { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    .dot.off { background: var(--red); }
+
+    /* ── Layout ───────────────────────────────────────────────── */
+    .wrap { max-width: 1440px; margin: 0 auto; padding: 20px 20px 40px; }
+
+    /* ── Connection panel ─────────────────────────────────────── */
+    .conn-panel {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 20px;
+    }
+    .conn-panel h2 {
+      font-size: .75rem; font-weight: 600;
+      color: var(--text2); text-transform: uppercase;
+      letter-spacing: .06em; margin-bottom: 12px;
+    }
+    .conn-form {
+      display: grid;
+      grid-template-columns: 2.4fr 1.5fr 1fr 1fr auto;
+      gap: 10px; align-items: end;
+    }
+    @media (max-width: 860px) { .conn-form { grid-template-columns: 1fr 1fr; } }
+
+    .fg { display: flex; flex-direction: column; gap: 4px; }
+    .fg label { font-size: .73rem; color: var(--text2); font-weight: 500; }
+    .fg input, .fg select {
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      padding: 6px 10px;
+      font-size: .85rem;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      width: 100%;
+    }
+    .fg input:focus, .fg select:focus { outline: none; border-color: var(--blue); }
+
+    .btn-row { display: flex; gap: 8px; align-items: flex-end; }
+    .btn {
+      padding: 7px 16px; border-radius: 6px; border: none;
+      cursor: pointer; font-size: .85rem; font-weight: 500;
+      transition: opacity .15s; white-space: nowrap;
+    }
+    .btn:hover { opacity: .85; }
+    .btn-primary { background: var(--blue); color: #0d1117; }
+    .btn-danger  { background: var(--red);  color: #fff; }
+    .btn-subtle  {
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      color: var(--text2);
+      font-size: .75rem; padding: 4px 10px;
+    }
+
+    /* ── Quick-connect presets ─────────────────────────────────── */
+    .presets { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+    .preset-btn {
+      font-size: .73rem; padding: 3px 10px;
+      border-radius: 12px;
+      background: rgba(88,166,255,.1);
+      border: 1px solid rgba(88,166,255,.25);
+      color: var(--blue); cursor: pointer;
+      transition: background .15s;
+    }
+    .preset-btn:hover { background: rgba(88,166,255,.2); }
+
+    /* ── Status cards ─────────────────────────────────────────── */
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px; margin-bottom: 20px;
+    }
+    @media (max-width: 860px) { .cards { grid-template-columns: repeat(2, 1fr); } }
+    @media (max-width: 480px) { .cards { grid-template-columns: 1fr; } }
+
+    .card {
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+    }
+    .card-lbl {
+      font-size: .72rem; font-weight: 600;
+      color: var(--text2); text-transform: uppercase;
+      letter-spacing: .06em; margin-bottom: 8px;
+      display: flex; align-items: center; gap: 5px;
+    }
+    .card-val {
+      font-size: 1.85rem; font-weight: 700;
+      line-height: 1.05; color: var(--text);
+    }
+    .card-sub { font-size: .75rem; color: var(--text3); margin-top: 5px; }
+
+    /* Battery bar */
+    .batt-wrap {
+      margin-top: 10px; height: 6px;
+      background: var(--border); border-radius: 3px; overflow: hidden;
+    }
+    .batt-bar {
+      height: 100%; border-radius: 3px;
+      transition: width .5s, background-color .5s;
+      background: var(--batt-ok);
+    }
+
+    /* Device tags */
+    .dev-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+    .dev-tag {
+      font-size: .72rem; padding: 2px 8px; border-radius: 4px;
+      background: rgba(88,166,255,.1);
+      border: 1px solid rgba(88,166,255,.2);
+      color: var(--blue);
+    }
+
+    /* ── Airtime card (full-width extra card) ─────────────────── */
+    .airtime-card {
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      border-radius: 8px; padding: 16px;
+      margin-bottom: 20px;
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 16px;
+    }
+    @media (max-width: 860px) { .airtime-card { grid-template-columns: repeat(3,1fr); } }
+    @media (max-width: 480px) { .airtime-card { grid-template-columns: 1fr 1fr; } }
+    .airtime-item {}
+    .airtime-item .a-lbl {
+      font-size: .7rem; color: var(--text2);
+      text-transform: uppercase; letter-spacing: .06em;
+      margin-bottom: 4px;
+    }
+    .airtime-item .a-val {
+      font-size: 1.1rem; font-weight: 700; color: var(--text);
+    }
+    .airtime-item .a-sub { font-size: .7rem; color: var(--text3); }
+
+    /* ── Charts ───────────────────────────────────────────────── */
+    .charts {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px; margin-bottom: 20px;
+    }
+    @media (max-width: 860px) { .charts { grid-template-columns: 1fr; } }
+
+    .chart-card {
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      border-radius: 8px; padding: 16px;
+    }
+    .chart-card h3 {
+      font-size: .78rem; font-weight: 600;
+      color: var(--text2); text-transform: uppercase;
+      letter-spacing: .06em; margin-bottom: 12px;
+    }
+    .chart-card canvas { max-height: 220px; }
+
+    /* ── External power detail ─────────────────────────────────── */
+    .extpower-card {
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      border-radius: 8px; padding: 16px;
+      margin-bottom: 20px;
+    }
+    .extpower-card h3 {
+      font-size: .78rem; font-weight: 600;
+      color: var(--text2); text-transform: uppercase;
+      letter-spacing: .06em; margin-bottom: 12px;
+    }
+    .extpower-channels {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+    }
+    @media (max-width: 600px) { .extpower-channels { grid-template-columns: 1fr 1fr; } }
+    .ch-item {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: 6px; padding: 10px 12px;
+    }
+    .ch-item .ch-lbl { font-size: .7rem; color: var(--text3); margin-bottom: 3px; }
+    .ch-item .ch-val { font-size: 1.1rem; font-weight: 700; color: var(--text); }
+
+    /* ── Packet feed ──────────────────────────────────────────── */
+    .feed-card {
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      border-radius: 8px; padding: 16px;
+      margin-bottom: 16px;
+    }
+    .feed-hdr {
+      display: flex; align-items: center;
+      justify-content: space-between; margin-bottom: 12px;
+    }
+    .feed-hdr h3 {
+      font-size: .78rem; font-weight: 600;
+      color: var(--text2); text-transform: uppercase;
+      letter-spacing: .06em;
+    }
+    .feed-wrap {
+      overflow-x: auto;
+      max-height: 340px;
+      overflow-y: auto;
+      border-radius: 4px;
+    }
+    table {
+      width: 100%; border-collapse: collapse;
+      font-size: .78rem;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+    }
+    thead th {
+      position: sticky; top: 0;
+      background: var(--bg3);
+      color: var(--text3); font-weight: 500;
+      text-align: left; padding: 6px 8px;
+      border-bottom: 1px solid var(--border);
+      text-transform: uppercase; font-size: .68rem;
+      letter-spacing: .06em; white-space: nowrap;
+    }
+    tbody td {
+      padding: 5px 8px;
+      border-bottom: 1px solid rgba(48,54,61,.4);
+      max-width: 180px; overflow: hidden;
+      text-overflow: ellipsis; white-space: nowrap;
+    }
+    tbody tr:hover td { background: var(--bg4); }
+
+    .rx  { color: var(--green); }
+    .tx  { color: var(--blue); }
+    .rtF { color: var(--orange); }
+    .rtD { color: var(--purple); }
+
+    .empty {
+      text-align: center; color: var(--text3);
+      padding: 40px 20px; font-size: .875rem;
+    }
+
+    /* ── Log ──────────────────────────────────────────────────── */
+    .log-card {
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      border-radius: 8px; padding: 16px;
+    }
+    .log-card h3 {
+      font-size: .78rem; font-weight: 600;
+      color: var(--text2); text-transform: uppercase;
+      letter-spacing: .06em; margin-bottom: 8px;
+    }
+    .log-out {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px; padding: 8px 10px;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-size: .73rem;
+      height: 130px; overflow-y: auto;
+      color: var(--text2);
+    }
+    .le { line-height: 1.7; }
+    .li { color: var(--blue); }
+    .ls { color: var(--green); }
+    .lw { color: var(--orange); }
+    .lr { color: var(--red); }
+  </style>
+</head>
+<body>
+
+<!-- Loading overlay (hidden once PyScript is ready) -->
+<div id="py-loading">
+  <div class="spinner"></div>
+  <p>Loading MeshCore Dashboard (PyScript)…</p>
+</div>
+
+<header>
+  <span style="font-size:1.3rem">📡</span>
+  <h1>MeshCore MQTT Dashboard</h1>
+  <div class="hdr-badge">
+    <div class="dot off" id="mqtt-dot"></div>
+    <span id="mqtt-txt">Disconnected</span>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <!-- Connection panel -->
+  <div class="conn-panel">
+    <h2>MQTT Connection</h2>
+    <div class="conn-form">
+      <div class="fg">
+        <label>Broker URL (WebSocket)</label>
+        <input id="f-url" type="text"
+               value="wss://mqtt-us-v1.letsmesh.net:443/mqtt"
+               placeholder="wss://host:port/path">
+      </div>
+      <div class="fg">
+        <label>Topic Filter</label>
+        <input id="f-topic" type="text"
+               value="meshcore/#"
+               placeholder="meshcore/# or meshcore/SEA/PUBKEY/#">
+      </div>
+      <div class="fg">
+        <label>Username (optional)</label>
+        <input id="f-user" type="text" placeholder="v1_PUBKEY or username">
+      </div>
+      <div class="fg">
+        <label>Password (optional)</label>
+        <input id="f-pass" type="password" placeholder="password or JWT token">
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-primary" id="btn-conn">Connect</button>
+        <button class="btn btn-danger"  id="btn-disc" style="display:none">Disconnect</button>
+      </div>
+    </div>
+    <div class="presets" id="preset-row">
+      <span style="font-size:.73rem;color:var(--text3);align-self:center">Presets:</span>
+      <button class="preset-btn" data-url="wss://mqtt-us-v1.letsmesh.net:443/mqtt">LetsMesh US</button>
+      <button class="preset-btn" data-url="wss://mqtt-eu-v1.letsmesh.net:443/mqtt">LetsMesh EU</button>
+      <button class="preset-btn" data-url="ws://localhost:9001">Local (ws:9001)</button>
+    </div>
+  </div>
+
+  <!-- Status cards row -->
+  <div class="cards">
+    <!-- Device -->
+    <div class="card">
+      <div class="card-lbl">🔌 Device</div>
+      <div class="card-val" id="c-name">—</div>
+      <div class="dev-tags" id="c-tags"></div>
+      <div class="card-sub" id="c-status">No data</div>
+    </div>
+
+    <!-- Battery -->
+    <div class="card">
+      <div class="card-lbl">🔋 Battery</div>
+      <div class="card-val" id="c-batt">—</div>
+      <div class="card-sub" id="c-batt-src">No data</div>
+      <div class="batt-wrap">
+        <div class="batt-bar" id="batt-bar" style="width:0%"></div>
+      </div>
+    </div>
+
+    <!-- Signal -->
+    <div class="card">
+      <div class="card-lbl">📶 Signal (last RX)</div>
+      <div class="card-val" id="c-rssi">—</div>
+      <div class="card-sub" id="c-snr">SNR: —</div>
+    </div>
+
+    <!-- Packets -->
+    <div class="card">
+      <div class="card-lbl">📊 Packets</div>
+      <div class="card-val" id="c-pkts">0</div>
+      <div class="card-sub" id="c-pkts-sub">RX: 0 / TX: 0</div>
+    </div>
+  </div>
+
+  <!-- Airtime / radio stats row -->
+  <div class="airtime-card" id="airtime-card">
+    <div class="airtime-item">
+      <div class="a-lbl">🕐 Device Uptime</div>
+      <div class="a-val" id="a-uptime">—</div>
+    </div>
+    <div class="airtime-item">
+      <div class="a-lbl">📤 TX Airtime</div>
+      <div class="a-val" id="a-tx">—</div>
+      <div class="a-sub" id="a-tx-pct"></div>
+    </div>
+    <div class="airtime-item">
+      <div class="a-lbl">📥 RX Airtime</div>
+      <div class="a-val" id="a-rx">—</div>
+      <div class="a-sub" id="a-rx-pct"></div>
+    </div>
+    <div class="airtime-item">
+      <div class="a-lbl">📡 Noise Floor</div>
+      <div class="a-val" id="a-noise">—</div>
+    </div>
+    <div class="airtime-item">
+      <div class="a-lbl">⚠️ RX Errors</div>
+      <div class="a-val" id="a-errs">—</div>
+    </div>
+  </div>
+
+  <!-- External power monitor (shown when data arrives) -->
+  <div class="extpower-card" id="extpower-card" style="display:none">
+    <h3>⚡ External Power Monitor (INA3221)</h3>
+    <div class="extpower-channels" id="extpower-channels"></div>
+  </div>
+
+  <!-- Charts -->
+  <div class="charts">
+    <div class="chart-card">
+      <h3>🔋 Battery Voltage History</h3>
+      <canvas id="chart-batt"></canvas>
+    </div>
+    <div class="chart-card">
+      <h3>📶 RSSI / SNR History</h3>
+      <canvas id="chart-sig"></canvas>
+    </div>
+  </div>
+
+  <!-- Live packet feed -->
+  <div class="feed-card">
+    <div class="feed-hdr">
+      <h3>📡 Live Packet Feed</h3>
+      <button class="btn btn-subtle" id="btn-clear">Clear</button>
+    </div>
+    <div class="feed-wrap">
+      <div class="empty" id="feed-empty">Waiting for packets…</div>
+      <table id="feed-table" style="display:none">
+        <thead>
+          <tr>
+            <th>Time</th><th>Dir</th><th>Route</th><th>Type</th>
+            <th>RSSI</th><th>SNR</th><th>Score</th><th>Hash</th>
+            <th>Node</th><th>Path</th>
+          </tr>
+        </thead>
+        <tbody id="feed-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Log -->
+  <div class="log-card">
+    <h3>📋 Connection Log</h3>
+    <div class="log-out" id="log-out"></div>
+  </div>
+
+</div><!-- /wrap -->
+
+<!-- ── JavaScript: Charts + MQTT ──────────────────────────────────── -->
+<script>
+/* Charts – created before PyScript so they exist when Python code runs */
+let _battChart, _sigChart;
+
+document.addEventListener('DOMContentLoaded', () => {
+  const chartOpts = {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: { duration: 250 },
+    plugins: { legend: { labels: { color: '#8b949e', boxWidth: 12 } } },
+    scales: {
+      x: {
+        ticks: { color: '#6e7681', maxTicksLimit: 8, maxRotation: 0 },
+        grid:  { color: 'rgba(48,54,61,.4)' }
+      },
+      y: {
+        ticks: { color: '#6e7681' },
+        grid:  { color: 'rgba(48,54,61,.4)' }
+      }
+    }
+  };
+
+  _battChart = new Chart(document.getElementById('chart-batt'), {
+    type: 'line',
+    data: {
+      labels: [],
+      datasets: [{
+        label: 'Voltage (mV)',
+        data: [],
+        borderColor: '#3fb950',
+        backgroundColor: 'rgba(63,185,80,.12)',
+        borderWidth: 2, pointRadius: 3, fill: true, tension: 0.35
+      }]
+    },
+    options: {
+      ...chartOpts,
+      scales: {
+        ...chartOpts.scales,
+        y: {
+          ...chartOpts.scales.y,
+          suggestedMin: 3000, suggestedMax: 4300,
+          ticks: { color: '#6e7681', callback: v => v + ' mV' }
+        }
+      }
+    }
+  });
+
+  _sigChart = new Chart(document.getElementById('chart-sig'), {
+    type: 'line',
+    data: {
+      labels: [],
+      datasets: [
+        {
+          label: 'RSSI (dBm)',
+          data: [],
+          borderColor: '#58a6ff',
+          backgroundColor: 'rgba(88,166,255,.07)',
+          borderWidth: 2, pointRadius: 2, fill: false, tension: 0.3,
+          yAxisID: 'y'
+        },
+        {
+          label: 'SNR (dB)',
+          data: [],
+          borderColor: '#bc8cff',
+          backgroundColor: 'rgba(188,140,255,.07)',
+          borderWidth: 2, pointRadius: 2, fill: false, tension: 0.3,
+          yAxisID: 'y1'
+        }
+      ]
+    },
+    options: {
+      ...chartOpts,
+      scales: {
+        x: chartOpts.scales.x,
+        y: {
+          type: 'linear', position: 'left',
+          grid: { color: 'rgba(48,54,61,.4)' },
+          ticks: { color: '#58a6ff', callback: v => v + ' dBm' }
+        },
+        y1: {
+          type: 'linear', position: 'right',
+          grid: { drawOnChartArea: false },
+          ticks: { color: '#bc8cff', callback: v => v + ' dB' }
+        }
+      }
+    }
+  });
+
+  // Expose to Python
+  window._battChart = _battChart;
+  window._sigChart  = _sigChart;
+});
+
+/* ── MQTT helpers (called from Python via window.*) ─── */
+window._mqttClient = null;
+
+function mqttConnect(url, topic, user, pass) {
+  if (window._mqttClient) { window._mqttClient.end(true); }
+
+  const opts = {
+    clientId: 'mcdash-' + Math.random().toString(16).slice(2, 10),
+    clean: true,
+    reconnectPeriod: 0,   // manual reconnect via button
+  };
+  if (user) { opts.username = user; opts.password = pass || ''; }
+
+  const client = mqtt.connect(url, opts);
+  window._mqttClient = client;
+
+  client.on('connect', () => {
+    // Ensure filter ends with wildcard if it's a prefix
+    let sub = topic.trim();
+    if (!sub.endsWith('#') && !sub.includes('+')) {
+      sub = sub.replace(/\/$/, '') + '/#';
+    }
+    client.subscribe(sub, { qos: 0 }, err => {
+      if (err) { window.pyLog('error', 'Subscribe error: ' + err.message); }
+      else      { window.pyOnConnect(sub); }
+    });
+  });
+
+  client.on('reconnect', () => window.pyLog('warn', 'Reconnecting…'));
+  client.on('error',  e  => window.pyLog('error', 'MQTT: ' + e.message));
+  client.on('close',  ()  => window.pyOnDisconnect());
+
+  client.on('message', (topic, buf) => {
+    if (window._pyReady && window.pyHandleMsg) {
+      window.pyHandleMsg(topic, buf.toString());
+    }
+  });
+}
+
+function mqttDisconnect() {
+  if (window._mqttClient) { window._mqttClient.end(true); window._mqttClient = null; }
+}
+
+/* Preset buttons fill the URL field */
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('.preset-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.getElementById('f-url').value = btn.dataset.url;
+    });
+  });
+});
+</script>
+
+<!-- ── PyScript: all Python data-processing & UI logic ───────────── -->
+<script type="py">
+from js import window, document
+from pyscript.ffi import create_proxy
+import json
+from datetime import datetime
+
+# ── Constants ─────────────────────────────────────────────────────────────────
+MAX_ROWS   = 250   # packet feed rows to keep
+MAX_CHART  = 80    # chart data points to keep
+
+# ── Shared state ──────────────────────────────────────────────────────────────
+state = {
+    "connected":  False,
+    "pkts_rx":    0,
+    "pkts_tx":    0,
+    "devices":    {},     # origin_id -> last status dict
+    "prev_stats": {},     # origin_id -> previous device stats (for delta calcs)
+}
+
+# ── DOM helpers ───────────────────────────────────────────────────────────────
+
+def el(id_):
+    return document.getElementById(id_)
+
+def set_text(id_, txt):
+    node = el(id_)
+    if node:
+        node.textContent = str(txt)
+
+def get_val(id_):
+    node = el(id_)
+    return node.value.strip() if node else ""
+
+
+# ── Log ───────────────────────────────────────────────────────────────────────
+
+def log(level, msg):
+    ts  = datetime.now().strftime("%H:%M:%S")
+    cls = {"info": "li", "success": "ls", "warn": "lw", "error": "lr"}.get(level, "li")
+    out = el("log-out")
+    div = document.createElement("div")
+    div.className = f"le {cls}"
+    div.textContent = f"[{ts}] {msg}"
+    out.appendChild(div)
+    out.scrollTop = out.scrollHeight
+
+
+# ── MQTT lifecycle (called from JS) ──────────────────────────────────────────
+
+def py_on_connect(subscribed_topic):
+    state["connected"] = True
+    dot = el("mqtt-dot")
+    dot.className = "dot on"
+    set_text("mqtt-txt", "Connected")
+    el("btn-conn").style.display = "none"
+    el("btn-disc").style.display = ""
+    log("success", f"Connected · subscribed to {subscribed_topic}")
+
+def py_on_disconnect():
+    state["connected"] = False
+    dot = el("mqtt-dot")
+    dot.className = "dot off"
+    set_text("mqtt-txt", "Disconnected")
+    el("btn-conn").style.display = ""
+    el("btn-disc").style.display = "none"
+    log("warn", "Disconnected from broker")
+
+def py_log(level, msg):
+    log(level, msg)
+
+
+# ── Message routing ───────────────────────────────────────────────────────────
+
+def py_handle_msg(topic, payload_str):
+    try:
+        data = json.loads(payload_str)
+    except Exception:
+        return  # ignore non-JSON lines
+
+    t = topic.lower()
+    if t.endswith("/status"):
+        _on_status(data)
+    elif t.endswith("/packets"):
+        _on_packet(data)
+    elif t.endswith("/debug"):
+        _on_debug(data)
+    # /raw: no JSON, skip
+
+
+# ── Status handler ────────────────────────────────────────────────────────────
+
+def _on_status(data: dict):
+    origin    = data.get("origin") or "Unknown"
+    origin_id = data.get("origin_id") or ""
+    status    = data.get("status", "unknown")
+    radio     = data.get("radio", "")
+    model     = data.get("model", "")
+    firmware  = data.get("firmware_version", "")
+
+    state["devices"][origin_id] = data
+
+    # --- Device card ---
+    set_text("c-name", origin)
+
+    tags = el("c-tags")
+    tags.innerHTML = ""
+    for txt in filter(None, [model, firmware, radio]):
+        span = document.createElement("span")
+        span.className = "dev-tag"
+        span.textContent = txt
+        tags.appendChild(span)
+
+    set_text("c-status", f"Status: {status} · {datetime.now().strftime('%H:%M:%S')}")
+
+    # --- Battery + device stats ---
+    device_stats = data.get("stats") or {}
+    _update_battery(device_stats, origin_id)
+    _update_airtime(device_stats, origin_id)
+    _update_extpower(device_stats)
+
+
+def _update_battery(stats: dict, origin_id: str):
+    batt_mv  = stats.get("battery_mv")
+    batt_src = stats.get("battery_source", "")
+
+    if batt_mv is None:
+        return
+
+    set_text("c-batt", f"{batt_mv} mV")
+    set_text("c-batt-src", f"Source: {batt_src}" if batt_src else "Internal battery")
+
+    # Capacity bar: 3200 mV = 0%, 4200 mV = 100% (Li-ion / LiPo)
+    pct = max(0.0, min(100.0, (batt_mv - 3200) / (4200 - 3200) * 100))
+    bar = el("batt-bar")
+    bar.style.width = f"{pct:.0f}%"
+    if pct > 50:
+        bar.style.backgroundColor = "var(--batt-ok)"
+    elif pct > 20:
+        bar.style.backgroundColor = "var(--batt-warn)"
+    else:
+        bar.style.backgroundColor = "var(--batt-low)"
+
+    # Append to battery chart
+    chart  = window._battChart
+    labels = chart.data.labels
+    vals   = chart.data.datasets[0].data
+    labels.push(datetime.now().strftime("%H:%M"))
+    vals.push(batt_mv)
+    while labels.length > MAX_CHART:
+        labels.shift(); vals.shift()
+    chart.update()
+
+
+def _update_airtime(stats: dict, origin_id: str):
+    uptime = stats.get("uptime_secs")
+    tx     = stats.get("tx_air_secs")
+    rx     = stats.get("rx_air_secs")
+    noise  = stats.get("noise_floor")
+    errs   = stats.get("recv_errors")
+
+    # Uptime
+    if uptime is not None:
+        h = uptime // 3600
+        m = (uptime % 3600) // 60
+        set_text("a-uptime", f"{h}h {m}m" if h else f"{m}m")
+
+    # Noise floor
+    if noise is not None:
+        set_text("a-noise", f"{noise} dB")
+
+    # Recv errors
+    if errs is not None:
+        set_text("a-errs", str(errs))
+
+    # TX / RX airtime + utilisation (requires uptime for %)
+    if tx is not None:
+        prev = state["prev_stats"].get(origin_id, {})
+        prev_tx = prev.get("tx_air_secs", tx)
+        prev_rx = prev.get("rx_air_secs", rx or 0)
+        prev_up = prev.get("uptime_secs", uptime or 1)
+
+        set_text("a-tx", f"{tx:.1f}s")
+        if uptime and uptime > 0:
+            tx_pct = (tx / uptime) * 100
+            set_text("a-tx-pct", f"{tx_pct:.2f}% lifetime")
+
+    if rx is not None:
+        set_text("a-rx", f"{rx:.1f}s")
+        if uptime and uptime > 0:
+            rx_pct = (rx / uptime) * 100
+            set_text("a-rx-pct", f"{rx_pct:.2f}% lifetime")
+
+    # Save as previous for next update
+    if stats:
+        state["prev_stats"][origin_id] = dict(stats)
+
+
+def _update_extpower(stats: dict):
+    """Display INA3221 external power monitor channel data if present."""
+    extpower = stats.get("extpower")
+    if not extpower:
+        return
+
+    card = el("extpower-card")
+    card.style.display = ""
+
+    channels_div = el("extpower-channels")
+    channels_div.innerHTML = ""
+
+    # INA3221 exposes ch1_voltage_mv, ch2_voltage_mv, ch3_voltage_mv
+    # (and optionally ch*_current_ma)
+    for ch in range(1, 4):
+        v_key = f"ch{ch}_voltage_mv"
+        a_key = f"ch{ch}_current_ma"
+        v_mv  = extpower.get(v_key)
+        a_ma  = extpower.get(a_key)
+
+        if v_mv is None:
+            continue
+
+        div = document.createElement("div")
+        div.className = "ch-item"
+
+        lbl = document.createElement("div")
+        lbl.className = "ch-lbl"
+        lbl.textContent = f"Channel {ch}"
+
+        val = document.createElement("div")
+        val.className = "ch-val"
+        val.textContent = f"{v_mv} mV"
+        if a_ma is not None:
+            val.textContent += f"  /  {a_ma} mA"
+
+        div.appendChild(lbl)
+        div.appendChild(val)
+        channels_div.appendChild(div)
+
+    # Any other keys (power, shunt, etc.)
+    skip = {f"ch{i}_{k}" for i in range(1, 4) for k in ("voltage_mv", "current_ma")}
+    for key, val_raw in extpower.items():
+        if key not in skip:
+            div = document.createElement("div")
+            div.className = "ch-item"
+            lbl = document.createElement("div")
+            lbl.className = "ch-lbl"
+            lbl.textContent = key.replace("_", " ")
+            val = document.createElement("div")
+            val.className = "ch-val"
+            val.textContent = str(val_raw)
+            div.appendChild(lbl)
+            div.appendChild(val)
+            channels_div.appendChild(div)
+
+
+# ── Packet handler ────────────────────────────────────────────────────────────
+
+def _on_packet(data: dict):
+    direction = data.get("direction", "?")
+    route     = data.get("route", "?")
+    pkt_type  = data.get("packet_type", "?")
+    rssi      = data.get("RSSI")
+    snr       = data.get("SNR")
+    score     = data.get("score")
+    hash_val  = data.get("hash", "")
+    time_str  = data.get("time", "")
+    origin    = data.get("origin", "?")
+    path      = data.get("path", "")
+
+    # Counters
+    if direction == "rx":
+        state["pkts_rx"] += 1
+    else:
+        state["pkts_tx"] += 1
+
+    total = state["pkts_rx"] + state["pkts_tx"]
+    set_text("c-pkts",     str(total))
+    set_text("c-pkts-sub", f"RX: {state['pkts_rx']} / TX: {state['pkts_tx']}")
+
+    # Signal card + chart (RX only)
+    if rssi is not None and direction == "rx":
+        set_text("c-rssi", f"{rssi} dBm")
+        set_text("c-snr",  f"SNR: {snr} dB" if snr else "SNR: —")
+        _push_signal_chart(rssi, snr, time_str)
+
+    _add_feed_row(time_str, direction, route, pkt_type, rssi, snr, score, hash_val, origin, path)
+
+
+def _push_signal_chart(rssi, snr, label):
+    chart = window._sigChart
+    lbls  = chart.data.labels
+    rssi_d = chart.data.datasets[0].data
+    snr_d  = chart.data.datasets[1].data
+
+    ts = (str(label)[-8:] if label else datetime.now().strftime("%H:%M:%S"))
+    lbls.push(ts)
+    rssi_d.push(int(rssi) if rssi is not None else None)
+    snr_d.push( int(snr)  if snr  is not None else None)
+
+    while lbls.length > MAX_CHART:
+        lbls.shift(); rssi_d.shift(); snr_d.shift()
+    chart.update()
+
+
+def _add_feed_row(time_str, direction, route, pkt_type, rssi, snr, score, hash_val, origin, path):
+    tbody = el("feed-body")
+    table = el("feed-table")
+    empty = el("feed-empty")
+
+    table.style.display = ""
+    empty.style.display = "none"
+
+    row = document.createElement("tr")
+
+    dir_cls   = "rx" if direction == "rx" else "tx"
+    route_cls = f"rt{route}" if route in ("F", "D") else ""
+
+    cells = [
+        (time_str or datetime.now().strftime("%H:%M:%S"), ""),
+        (direction.upper() if direction else "?", dir_cls),
+        (route or "?",  route_cls),
+        (pkt_type or "?", ""),
+        (f"{rssi} dBm" if rssi is not None else "—", ""),
+        (f"{snr} dB"   if snr  is not None else "—", ""),
+        (str(score)    if score is not None else "—", ""),
+        (str(hash_val)[:16]  if hash_val else "—", ""),
+        (str(origin)[:24] if origin else "—", ""),
+        (str(path)[:30]   if path   else "—", ""),
+    ]
+
+    for txt, cls in cells:
+        td = document.createElement("td")
+        td.textContent = str(txt)
+        if cls:
+            td.className = cls
+        row.appendChild(td)
+
+    first = tbody.firstChild
+    if first:
+        tbody.insertBefore(row, first)
+    else:
+        tbody.appendChild(row)
+
+    while tbody.children.length > MAX_ROWS:
+        tbody.removeChild(tbody.lastChild)
+
+
+# ── Debug handler ─────────────────────────────────────────────────────────────
+
+def _on_debug(data: dict):
+    msg = data.get("message", "")
+    if msg:
+        log("info", f"DBG: {msg[:100]}")
+
+
+# ── Button handlers ───────────────────────────────────────────────────────────
+
+def on_connect(evt):
+    url   = get_val("f-url")
+    topic = get_val("f-topic") or "meshcore/#"
+    user  = get_val("f-user")
+    pwd   = get_val("f-pass")
+
+    if not url:
+        log("error", "Please enter a broker URL"); return
+
+    log("info", f"Connecting to {url} …")
+    window.mqttConnect(url, topic, user or None, pwd or None)
+
+def on_disconnect(evt):
+    window.mqttDisconnect()
+
+def on_clear(evt):
+    el("feed-body").innerHTML = ""
+    el("feed-table").style.display = "none"
+    el("feed-empty").style.display = ""
+    el("feed-empty").textContent = "Feed cleared."
+    state["pkts_rx"] = state["pkts_tx"] = 0
+    set_text("c-pkts",     "0")
+    set_text("c-pkts-sub", "RX: 0 / TX: 0")
+
+
+# ── Wire everything up ────────────────────────────────────────────────────────
+
+# Expose callbacks to JavaScript
+window.pyHandleMsg    = create_proxy(py_handle_msg)
+window.pyOnConnect    = create_proxy(py_on_connect)
+window.pyOnDisconnect = create_proxy(py_on_disconnect)
+window.pyLog          = create_proxy(py_log)
+
+# Button listeners
+el("btn-conn").addEventListener("click",  create_proxy(on_connect))
+el("btn-disc").addEventListener("click",  create_proxy(on_disconnect))
+el("btn-clear").addEventListener("click", create_proxy(on_clear))
+
+# Signal PyScript is ready
+window._pyReady = True
+
+# Hide loading overlay
+loading = el("py-loading")
+if loading:
+    loading.style.display = "none"
+
+log("success", "MeshCore Dashboard ready  •  Python running in your browser via PyScript")
+log("info",    "Enter a broker URL and click Connect to start receiving data")
+</script>
+
+</body>
+</html>
